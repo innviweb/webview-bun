@@ -156,6 +156,10 @@ export class Webview {
    * resources.
    */
   destroy() {
+    if (this.#handle === null) {
+      return;
+    }
+
     for (const callback of this.#callbacks.keys()) this.unbind(callback);
     lib.symbols.webview_terminate(this.#handle);
     lib.symbols.webview_destroy(this.#handle);
@@ -185,6 +189,40 @@ export class Webview {
   run() {
     lib.symbols.webview_run(this.#handle);
     this.destroy();
+  }
+
+  /**
+   * Pumps the OS message loop once.
+   *
+   * @param block When true, waits for at least one message before returning.
+   * Defaults to false.
+   * @returns `true` while the webview should keep running, otherwise `false`.
+   */
+  pump(block: boolean = false): boolean {
+    if (this.#handle === null) {
+      return false;
+    }
+
+    return !!lib.symbols.webview_pump_msgloop(this.#handle, block ? 1 : 0);
+  }
+
+  /**
+   * Runs the webview without blocking Bun's event loop.
+   *
+   * @param onClose Optional callback invoked after the window closes.
+   */
+  runNonBlocking(onClose?: () => void) {
+    const step = () => {
+      if (this.pump(false)) {
+        setTimeout(step, 0);
+        return;
+      }
+
+      this.destroy();
+      onClose?.();
+    };
+
+    step();
   }
 
   /**

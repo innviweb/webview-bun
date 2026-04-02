@@ -87,4 +87,8 @@ export const lib = dlopen(lib_file.default, {
     args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr],
     returns: FFIType.void,
   },
+  webview_pump_msgloop: {
+    args: [FFIType.ptr, FFIType.i32],
+    returns: FFIType.i32,
+  },
 });
