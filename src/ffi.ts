@@ -77,15 +77,15 @@ export const lib = dlopen(lib_file.default, {
   },
   webview_bind: {
     args: [FFIType.ptr, FFIType.ptr, FFIType.function, FFIType.ptr],
-    returns: FFIType.void,
+    returns: FFIType.i32,
   },
   webview_unbind: {
     args: [FFIType.ptr, FFIType.ptr],
-    returns: FFIType.void,
+    returns: FFIType.i32,
   },
   webview_return: {
     args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr],
-    returns: FFIType.void,
+    returns: FFIType.i32,
   },
   webview_pump_msgloop: {
     args: [FFIType.ptr, FFIType.i32],
