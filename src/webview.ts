@@ -1,6 +1,29 @@
 import { CString, FFIType, JSCallback, type Pointer } from "bun:ffi";
 import { encodeCString, instances, lib } from "./ffi";
 
+const enum WebviewErrorCode {
+  INVALID_ARGUMENT = -2,
+  OK = 0,
+  DUPLICATE = 1,
+  NOT_FOUND = 2,
+}
+
+function encodeErrorResult(error: unknown): string {
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return JSON.stringify("An unexpected error occurred.");
+  }
+}
+
+function createBindError(name: string, code: number): Error {
+  if (code === WebviewErrorCode.DUPLICATE) {
+    return new Error(`A binding named "${name}" already exists.`);
+  }
+
+  return new Error(`Failed to bind "${name}" (webview error ${code}).`);
+}
+
 /** Window size */
 export interface Size {
   /** The width of the window */
@@ -156,6 +179,10 @@ export class Webview {
    * resources.
    */
   destroy() {
+    if (this.#handle === null) {
+      return;
+    }
+
     for (const callback of this.#callbacks.keys()) this.unbind(callback);
     lib.symbols.webview_terminate(this.#handle);
     lib.symbols.webview_destroy(this.#handle);
@@ -188,6 +215,40 @@ export class Webview {
   }
 
   /**
+   * Pumps the OS message loop once.
+   *
+   * @param block When true, waits for at least one message before returning.
+   * Defaults to false.
+   * @returns `true` while the webview should keep running, otherwise `false`.
+   */
+  pump(block: boolean = false): boolean {
+    if (this.#handle === null) {
+      return false;
+    }
+
+    return !!lib.symbols.webview_pump_msgloop(this.#handle, block ? 1 : 0);
+  }
+
+  /**
+   * Runs the webview without blocking Bun's event loop.
+   *
+   * @param onClose Optional callback invoked after the window closes.
+   */
+  runNonBlocking(onClose?: () => void) {
+    const step = () => {
+      if (this.pump(false)) {
+        setTimeout(step, 0);
+        return;
+      }
+
+      this.destroy();
+      onClose?.();
+    };
+
+    step();
+  }
+
+  /**
    * Binds a callback so that it will appear in the webview with the given name
    * as a global async JavaScript function. Callback receives a seq and req value.
    * The seq parameter is an identifier for using {@link Webview.return} to
@@ -204,6 +265,10 @@ export class Webview {
     callback: (seq: string, req: string, arg: Pointer | null) => void,
     arg: Pointer | null = null,
   ) {
+    if (this.#callbacks.has(name)) {
+      throw createBindError(name, WebviewErrorCode.DUPLICATE);
+    }
+
     const callbackResource = new JSCallback(
       (seqPtr: Pointer, reqPtr: Pointer, arg: Pointer | null) => {
         const seq = seqPtr ? new CString(seqPtr) : "";
@@ -216,13 +281,19 @@ export class Webview {
         returns: FFIType.void,
       },
     );
-    this.#callbacks.set(name, callbackResource);
-    lib.symbols.webview_bind(
+    const code = lib.symbols.webview_bind(
       this.#handle,
       encodeCString(name),
       callbackResource.ptr,
       arg,
     );
+
+    if (code !== WebviewErrorCode.OK) {
+      callbackResource.close();
+      throw createBindError(name, code);
+    }
+
+    this.#callbacks.set(name, callbackResource);
   }
 
   /**
@@ -274,22 +345,19 @@ export class Webview {
    */
   bind(name: string, callback: (...args: any) => any) {
     this.bindRaw(name, (seq, req) => {
-      const args = JSON.parse(req);
-      let result;
-      let success: boolean;
       try {
-        result = callback(...args);
-        success = true;
+        const args = JSON.parse(req);
+        const result = callback(...args);
+      
+        if (result instanceof Promise) {
+          result
+            .then((r) => this.return(seq, 0, JSON.stringify(r)))
+            .catch((err) => this.return(seq, 1, encodeErrorResult(err)));
+        } else {
+          this.return(seq, 0, JSON.stringify(result));
+        }
       } catch (err) {
-        result = err;
-        success = false;
-      }
-      if (result instanceof Promise) {
-        result.then((r) =>
-          this.return(seq, success ? 0 : 1, JSON.stringify(r)),
-        );
-      } else {
-        this.return(seq, success ? 0 : 1, JSON.stringify(result));
+        this.return(seq, 1, encodeErrorResult(err));
       }
     });
   }
@@ -300,11 +368,21 @@ export class Webview {
    *
    * @param name The name of the bound function
    */
-  unbind(name: string) {
+  unbind(name: string): boolean {
+    const callbackResource = this.#callbacks.get(name);
+    if (!callbackResource) {
+      return true;
+    }
+
     //@ts-ignore
-    lib.symbols.webview_unbind(this.#handle, encodeCString(name));
-    this.#callbacks.get(name)?.close();
+    const code = lib.symbols.webview_unbind(this.#handle, encodeCString(name));
+    if (code !== WebviewErrorCode.OK && code !== WebviewErrorCode.NOT_FOUND) {
+      return false;
+    }
+
+    callbackResource.close();
     this.#callbacks.delete(name);
+    return true;
   }
 
   /**
@@ -316,13 +394,19 @@ export class Webview {
    * result value otherwise the result is an error JSON object
    * @param result The stringified JSON response
    */
-  return(seq: string, status: number, result: string) {
-    lib.symbols.webview_return(
+  return(seq: string, status: number, result: string): boolean {
+    if (this.#handle === null) {
+      return false;
+    }
+
+    const code = lib.symbols.webview_return(
       this.#handle,
       encodeCString(seq),
       status,
       encodeCString(result),
     );
+
+    return code === WebviewErrorCode.OK;
   }
 
   /**
