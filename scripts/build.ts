@@ -18,6 +18,7 @@ switch (platform) {
             -DWEBVIEW_WEBKITGTK_API=6.0 \
             -DWEBVIEW_ENABLE_CHECKS=false \
             -DWEBVIEW_BUILD_AMALGAMATION=false \
+            -DWEBVIEW_BUILD_DOCS=false \
             -DWEBVIEW_BUILD_EXAMPLES=false \
             -DWEBVIEW_BUILD_STATIC_LIBRARY=false \
             -DWEBVIEW_BUILD_TESTS=false
@@ -33,6 +34,7 @@ switch (platform) {
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/universal-macos-llvm.cmake \
             -DWEBVIEW_ENABLE_CHECKS=false \
             -DWEBVIEW_BUILD_AMALGAMATION=false \
+            -DWEBVIEW_BUILD_DOCS=false \
             -DWEBVIEW_BUILD_EXAMPLES=false \
             -DWEBVIEW_BUILD_STATIC_LIBRARY=false \
             -DWEBVIEW_BUILD_TESTS=false
