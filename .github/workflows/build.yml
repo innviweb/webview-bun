@@ -7,6 +7,9 @@ on:
     tags:
       - "v*"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   contents: read
 
@@ -148,6 +151,9 @@ jobs:
       - name: Run nonblocking probe - Linux x64
         if: runner.os == 'Linux' && matrix.probe
         shell: bash
+        env:
+          GTK_A11Y: none
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
         run: xvfb-run --auto-servernum bun run examples/nonblocking-probe.ts
 
       - name: Upload workflow artifact
