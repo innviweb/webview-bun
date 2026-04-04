@@ -7,9 +7,6 @@ on:
     tags:
       - "v*"
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 permissions:
   contents: read
 
@@ -48,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -157,7 +154,7 @@ jobs:
         run: xvfb-run --auto-servernum bun run examples/nonblocking-probe.ts
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           if-no-files-found: error
           name: binary-${{ matrix.artifact_name }}
@@ -173,7 +170,7 @@ jobs:
 
     steps:
       - name: Download built artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: binary-*
           merge-multiple: true
