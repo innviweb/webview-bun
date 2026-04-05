@@ -1,7 +1,8 @@
 import { $ } from "bun";
-$.nothrow();
 
 const { arch, platform } = process;
+
+await $`mkdir -p build`;
 
 switch (platform) {
   case "win32":
