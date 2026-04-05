@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - live
+    paths-ignore:
+      - "build/**"
     tags:
       - "v*"
 
@@ -16,6 +18,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/live'
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -164,29 +167,99 @@ jobs:
           name: binary-${{ matrix.artifact_name }}
           path: ${{ matrix.binary_path }}
 
-  publish-release:
-    name: Publish release assets
-    if: startsWith(github.ref, 'refs/tags/v')
+  sync-build-artifacts:
+    name: Sync build artifacts to live
+    if: github.ref == 'refs/heads/live'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
 
     steps:
+      - name: Checkout live branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: live
+          submodules: recursive
+
       - name: Download built artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           merge-multiple: true
-          path: release-assets
+          path: downloaded-build
+
+      - name: Sync tracked binaries into build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected_files=(
+            libwebview-x64.so
+            libwebview-arm64.so
+            libwebview.dll
+            libwebview.dylib
+          )
+
+          for file in "${expected_files[@]}"; do
+            if [ ! -f "downloaded-build/${file}" ]; then
+              echo "::error::Missing downloaded artifact: ${file}"
+              exit 1
+            fi
+          done
+
+          cp downloaded-build/libwebview-x64.so build/libwebview-x64.so
+          cp downloaded-build/libwebview-arm64.so build/libwebview-arm64.so
+          cp downloaded-build/libwebview.dll build/libwebview.dll
+          cp downloaded-build/libwebview.dylib build/libwebview.dylib
+
+      - name: Commit updated binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- build; then
+            echo "No binary changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add build
+          git commit -m "ci: rebuild platform binaries [skip ci]"
+          git push origin HEAD:live
+
+  publish-release:
+    name: Publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tagged source tree
+        uses: actions/checkout@v5
 
       - name: Inspect release inputs
         shell: bash
         run: |
           echo "Repository: ${GITHUB_REPOSITORY}"
           echo "Tag: ${GITHUB_REF_NAME}"
+          for file in \
+            build/libwebview-x64.so \
+            build/libwebview-arm64.so \
+            build/libwebview.dll \
+            build/libwebview.dylib
+          do
+            if [ ! -f "${file}" ]; then
+              echo "::error::Missing expected release file: ${file}"
+              exit 1
+            fi
+          done
           echo "Assets:"
-          ls -la release-assets
+          ls -la build
 
       - name: Publish GitHub release assets
         shell: bash
@@ -214,6 +287,10 @@ jobs:
           fi
 
           echo "Uploading release assets for ${GITHUB_REF_NAME}."
-          gh release upload "${GITHUB_REF_NAME}" release-assets/* \
+          gh release upload "${GITHUB_REF_NAME}" \
+            build/libwebview-x64.so \
+            build/libwebview-arm64.so \
+            build/libwebview.dll \
+            build/libwebview.dylib \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
