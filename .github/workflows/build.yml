@@ -221,7 +221,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git diff --quiet -- build; then
+          git add build
+
+          if git diff --cached --quiet -- build; then
             echo "No binary changes detected."
             exit 0
           fi
@@ -229,7 +231,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add build
           git commit -m "ci: rebuild platform binaries [skip ci]"
           git push origin HEAD:live
 
