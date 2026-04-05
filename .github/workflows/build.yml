@@ -195,6 +195,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          mkdir -p build
+
           expected_files=(
             libwebview-x64.so
             libwebview-arm64.so
