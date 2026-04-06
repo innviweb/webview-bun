@@ -23,6 +23,14 @@ export const enum SizeHint {
   FIXED,
 }
 
+function createWebviewErrorMessage() {
+  if (process.platform === "win32") {
+    return "Failed to create the native webview instance. WebView2 may be missing or unavailable on this system.";
+  }
+
+  return "Failed to create the native webview instance.";
+}
+
 /** An instance of a webview window.*/
 export class Webview {
   #handle: Pointer | null = null;
@@ -147,6 +155,11 @@ export class Webview {
       typeof debugOrHandle === "bigint" || typeof debugOrHandle === "number"
         ? debugOrHandle
         : lib.symbols.webview_create(Number(debugOrHandle), window);
+
+    if (!this.#handle) {
+      throw new Error(createWebviewErrorMessage());
+    }
+
     if (size !== undefined) this.size = size;
     instances.push(this);
   }
