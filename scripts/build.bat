@@ -24,6 +24,7 @@ cd %~dp0..\webview
 cmake -G "Ninja Multi-Config" -B build -S . ^
 	-DWEBVIEW_ENABLE_CHECKS=false ^
 	-DWEBVIEW_BUILD_AMALGAMATION=false ^
+	-DWEBVIEW_BUILD_DOCS=false ^
 	-DWEBVIEW_BUILD_EXAMPLES=false ^
 	-DWEBVIEW_USE_STATIC_MSVC_RUNTIME=ON ^
 	-DWEBVIEW_BUILD_STATIC_LIBRARY=false ^

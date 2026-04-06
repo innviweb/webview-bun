@@ -1,0 +1,306 @@
+name: Build Webview Binaries
+
+on:
+  push:
+    branches:
+      - live
+    paths-ignore:
+      - "build/**"
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/live'
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux x64
+            runner: ubuntu-24.04
+            artifact_name: linux-x64
+            binary_path: build/libwebview-x64.so
+            probe: true
+          - label: linux arm64
+            runner: ubuntu-24.04-arm
+            artifact_name: linux-arm64
+            binary_path: build/libwebview-arm64.so
+            probe: false
+          - label: windows x64
+            runner: windows-2022
+            artifact_name: windows-x64
+            binary_path: build/libwebview.dll
+            probe: false
+          - label: macOS universal
+            runner: macos-15
+            artifact_name: macos-universal
+            binary_path: build/libwebview.dylib
+            probe: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps - Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            ninja-build \
+            xvfb
+
+      - name: Install deps - macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            brew install cmake
+          fi
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+
+      - name: Install deps - Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install --yes cmake --installargs '"ADD_CMAKE_TO_PATH=System"'
+          choco install --yes ninja
+
+      - name: Install Bun dependencies - Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bun install
+
+      - name: Install Bun dependencies - Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: bun install
+
+      - name: Build native library - Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bun run build
+
+      - name: Build native library - Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: bun run build
+
+      - name: Verify exported symbols - Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for symbol in webview_pump_msgloop webview_create webview_bind; do
+            nm -D "${{ matrix.binary_path }}" | grep -F "${symbol}" >/dev/null
+          done
+
+      - name: Verify exported symbols - macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for symbol in webview_pump_msgloop webview_create webview_bind; do
+            nm -gU "${{ matrix.binary_path }}" | grep -F "${symbol}" >/dev/null
+          done
+
+      - name: Verify exported symbols - Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) {
+            throw "Failed to find vswhere.exe"
+          }
+
+          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installPath) {
+            throw "Failed to find a Visual Studio install with VC tools"
+          }
+
+          $dumpbin = Get-ChildItem -Path (Join-Path $installPath 'VC\Tools\MSVC') -Filter dumpbin.exe -Recurse |
+            Where-Object { $_.FullName -like '*Hostx64\x64\dumpbin.exe' } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) {
+            throw "Failed to find dumpbin.exe"
+          }
+
+          $exports = & $dumpbin /EXPORTS ${{ matrix.binary_path }} | Out-String
+          foreach ($symbol in 'webview_pump_msgloop', 'webview_create', 'webview_bind') {
+            if ($exports -notmatch [regex]::Escape($symbol)) {
+              throw "Missing export: $symbol"
+            }
+          }
+
+          $dependents = & $dumpbin /DEPENDENTS ${{ matrix.binary_path }} | Out-String
+          foreach ($dll in 'VCRUNTIME140.dll', 'VCRUNTIME140_1.dll', 'MSVCP140.dll') {
+            if ($dependents -match [regex]::Escape($dll)) {
+              throw "Unexpected MSVC runtime dependency: $dll"
+            }
+          }
+
+      - name: Run nonblocking probe - Linux x64
+        if: runner.os == 'Linux' && matrix.probe
+        shell: bash
+        env:
+          GTK_A11Y: none
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+        run: xvfb-run --auto-servernum bun run examples/nonblocking-probe.ts
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          name: binary-${{ matrix.artifact_name }}
+          path: ${{ matrix.binary_path }}
+
+  sync-build-artifacts:
+    name: Sync build artifacts to live
+    if: github.ref == 'refs/heads/live'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout live branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: live
+          submodules: recursive
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: downloaded-build
+
+      - name: Sync tracked binaries into build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p build
+
+          expected_files=(
+            libwebview-x64.so
+            libwebview-arm64.so
+            libwebview.dll
+            libwebview.dylib
+          )
+
+          for file in "${expected_files[@]}"; do
+            if [ ! -f "downloaded-build/${file}" ]; then
+              echo "::error::Missing downloaded artifact: ${file}"
+              exit 1
+            fi
+          done
+
+          cp downloaded-build/libwebview-x64.so build/libwebview-x64.so
+          cp downloaded-build/libwebview-arm64.so build/libwebview-arm64.so
+          cp downloaded-build/libwebview.dll build/libwebview.dll
+          cp downloaded-build/libwebview.dylib build/libwebview.dylib
+
+      - name: Commit updated binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git add build
+
+          if git diff --cached --quiet -- build; then
+            echo "No binary changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "ci: rebuild platform binaries [skip ci]"
+          git push origin HEAD:live
+
+  publish-release:
+    name: Publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tagged source tree
+        uses: actions/checkout@v5
+
+      - name: Inspect release inputs
+        shell: bash
+        run: |
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Tag: ${GITHUB_REF_NAME}"
+          for file in \
+            build/libwebview-x64.so \
+            build/libwebview-arm64.so \
+            build/libwebview.dll \
+            build/libwebview.dylib
+          do
+            if [ ! -f "${file}" ]; then
+              echo "::error::Missing expected release file: ${file}"
+              exit 1
+            fi
+          done
+          echo "Assets:"
+          ls -la build
+
+      - name: Publish GitHub release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "::error::GitHub CLI (gh) is not available on this runner."
+            exit 1
+          fi
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_TOKEN is empty. Check repository Actions workflow permissions."
+            exit 1
+          fi
+
+          if ! gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} does not exist yet. Creating it now."
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "Automated binary build for ${GITHUB_REF_NAME}"
+          fi
+
+          echo "Uploading release assets for ${GITHUB_REF_NAME}."
+          gh release upload "${GITHUB_REF_NAME}" \
+            build/libwebview-x64.so \
+            build/libwebview-arm64.so \
+            build/libwebview.dll \
+            build/libwebview.dylib \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber

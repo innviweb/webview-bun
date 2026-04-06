@@ -184,6 +184,15 @@ For more examples, browse the `examples` folder of this repository.
 
 This repository is a port of [webview_deno](https://github.com/webview/webview_deno) with various changes to work with the bun runtime.
 
+## Fork Notes
+
+This fork is maintained by `innviweb`.
+
+- Base upstream package: `webview-bun` `2.4.0`
+- Fork revision numbering: `2.4.0-1`, `2.4.0-2`, ...
+- Current fork-specific change: non-blocking message loop support via
+  `Webview.pump()` and `Webview.runNonBlocking()`
+
 ## License
 
 This repository uses MIT license. See [LICENSE](https://github.com/tr1ckydev/webview-bun/blob/main/LICENSE) for full license text.
