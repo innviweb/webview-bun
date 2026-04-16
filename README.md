@@ -58,6 +58,72 @@ webview.run();
 
 For more examples, browse the `examples` folder of this repository.
 
+## Breaking changes
+
+This release removes the old positional constructor. `new Webview(true, ...)` and
+`new Webview(debug, size, window)` are gone. Use one options object instead.
+
+```ts
+// Before
+const webview = new Webview(true, {
+  width: 800,
+  height: 500,
+  hint: SizeHint.NONE,
+});
+
+// After
+const webview = new Webview({
+  debug: true,
+  size: {
+    width: 800,
+    height: 500,
+    hint: SizeHint.NONE,
+  },
+});
+```
+
+## Error serialization
+
+The Bun wrapper now accepts `serializeError` and `serialize` options in the constructor.
+The default `serializeError` returns `{ name, message, stack }`. If production secrecy
+matters, inject your own serializer and strip `stack` or collapse internal cause chains
+there.
+
+```ts
+const webview = new Webview({
+  serializeError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { name: "Error", message, stack: "" };
+  },
+});
+```
+
+## Page-side error decoding
+
+The native bridge exposes `window.__webview__.api.setDecodeError(fn)` so page-side rejected
+promises can reconstruct Bun-serialized errors however your app wants. Pair it with the
+Bun-side `serializeError` option: if you serialize extra fields on the Bun side, decode
+those same fields on the page side so the round-trip stays symmetric.
+
+```ts
+const webview = new Webview({
+  serializeError(error) {
+    if (!(error instanceof Error)) return { message: String(error) };
+    return { name: error.name, message: error.message, stack: error.stack ?? "" };
+  },
+});
+
+webview.init(`
+  window.__webview__.api.setDecodeError((value) => {
+    if (!value || typeof value !== "object" || typeof value.message !== "string") return value;
+    const error = new Error(value.message);
+    if (typeof value.name === "string") error.name = value.name;
+    if (typeof value.stack === "string") error.stack = value.stack;
+    return error;
+  });
+`);
+```
+
 ## Single-file executable
 
 You can compile a single self-sufficient executable file for your webview app.
@@ -197,6 +263,7 @@ This fork is maintained by `innviweb`.
   - legacy blocking event loop available as `Webview.runSync()`
   - single-options constructor with `debug`, `size`, `window`, `handle`,
     `serialize`, and `serializeError`
+  - page-side error reconstruction hook via `window.__webview__.api.setDecodeError(fn)`
 
 ## License
 

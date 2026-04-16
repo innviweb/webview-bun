@@ -8,14 +8,23 @@ const enum WebviewErrorCode {
   NOT_FOUND = 2,
 }
 
-type Serializer = (value: unknown) => unknown;
+export type JsonValue =
+  | string | number | boolean | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
-function serializeError(err: unknown) {
+export type Serializer = (value: unknown) => JsonValue;
+
+function defaultSerialize(value: unknown): JsonValue {
+  return value as JsonValue;
+}
+
+function serializeError(err: unknown): JsonValue {
   if (err instanceof Error) {
     return {
       message: err.message,
       name: err.name,
-      stack: err.stack,
+      stack: err.stack ?? `${err.name}: ${err.message}`,
     };
   }
 
@@ -201,14 +210,14 @@ export class Webview {
     const { debug = false, handle, window = null, size } = options;
 
     this.#handle = handle ?? lib.symbols.webview_create(Number(debug), window);
-    this.#serialize = options.serialize ?? ((value: unknown) => value);
+    this.#serialize = options.serialize ?? defaultSerialize;
     this.#serializeError = options.serializeError ?? serializeError;
 
     if (!this.#handle) {
       throw new Error(createWebviewErrorMessage());
     }
 
-    if (!Object.hasOwn( options, "size")) {
+    if (!Object.hasOwn(options, "size")) {
       this.size = { width: 1024, height: 768, hint: SizeHint.NONE };
     } else if (size) {
       this.size = size;
@@ -391,7 +400,7 @@ export class Webview {
       try {
         const args = JSON.parse(req);
         const result = callback(...args);
-        
+
         if (result instanceof Promise) {
           result
             .then(
