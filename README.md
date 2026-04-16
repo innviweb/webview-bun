@@ -54,6 +54,8 @@ webview.setHTML(html);
 webview.run();
 ```
 
+`run()` is non-blocking. Use `runSync()` if you need the legacy blocking event loop.
+
 For more examples, browse the `examples` folder of this repository.
 
 ## Single-file executable
@@ -190,8 +192,11 @@ This fork is maintained by `innviweb`.
 
 - Base upstream package: `webview-bun` `2.4.0`
 - Fork revision numbering: `2.4.0-1`, `2.4.0-2`, ...
-- Current fork-specific change: non-blocking message loop support via
-  `Webview.pump()` and `Webview.runNonBlocking()`
+- Current fork-specific changes:
+  - non-blocking message loop support via `Webview.pump()` and default `Webview.run()`
+  - legacy blocking event loop available as `Webview.runSync()`
+  - single-options constructor with `debug`, `size`, `window`, `handle`,
+    `serialize`, and `serializeError`
 
 ## License
 

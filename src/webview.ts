@@ -8,11 +8,31 @@ const enum WebviewErrorCode {
   NOT_FOUND = 2,
 }
 
-function encodeErrorResult(error: unknown): string {
+type Serializer = (value: unknown) => unknown;
+
+function serializeError(err: unknown) {
+  if (err instanceof Error) {
+    return {
+      message: err.message,
+      name: err.name,
+      stack: err.stack,
+    };
+  }
+
+  return {
+    message: String(err)
+  };
+}
+
+function encodeResult(value: unknown, serialize: Serializer): string {
+  return JSON.stringify(serialize(value));
+}
+
+function encodeErrorResult(value: unknown, serialize: Serializer): string {
   try {
-    return JSON.stringify(error);
+    return JSON.stringify(serialize(value));
   } catch {
-    return JSON.stringify("An unexpected error occurred.");
+    return JSON.stringify(serializeError(new Error("An unexpected error occurred.")));
   }
 }
 
@@ -46,6 +66,19 @@ export const enum SizeHint {
   FIXED,
 }
 
+export interface WebviewOptions {
+  debug?: boolean;
+  handle?: Pointer;
+  serialize?: Serializer;
+  serializeError?: Serializer;
+  size?: Size;
+  window?: Pointer | null;
+}
+
+export interface WebviewApi {
+  setDecodeError(fn: (err: unknown) => unknown): void;
+}
+
 function createWebviewErrorMessage() {
   if (process.platform === "win32") {
     return "Failed to create the native webview instance. WebView2 may be missing or unavailable on this system.";
@@ -58,6 +91,8 @@ function createWebviewErrorMessage() {
 export class Webview {
   #handle: Pointer | null = null;
   #callbacks: Map<string, JSCallback> = new Map();
+  #serialize: Serializer;
+  #serializeError: Serializer;
 
   /** **UNSAFE**: Highly unsafe API, beware!
    *
@@ -127,12 +162,6 @@ export class Webview {
 
   /** **UNSAFE**: Highly unsafe API, beware!
    *
-   * Creates a new webview instance from a webview handle.
-   *
-   * @param handle A previously created webview instances handle
-   */
-  constructor(handle: Pointer);
-  /**
    * Creates a new webview instance.
    *
    * ## Example
@@ -140,50 +169,51 @@ export class Webview {
    * ```ts
    * import { Webview, SizeHint } from "webview-bun";
    *
-   * // Create a new webview and change from the default size to a small fixed window
-   * const webview = new Webview(true, {
-   *   width: 200,
-   *   height: 200,
-   *   hint: SizeHint.FIXED
+   * const webview = new Webview({
+   *   debug: true,
+   *   size: {
+   *     width: 200,
+   *     height: 200,
+   *     hint: SizeHint.FIXED,
+   *   },
    * });
    *
    * webview.navigate("https://bun.sh/");
    * webview.run();
    * ```
    *
-   * @param debug Defaults to false, when true developer tools are enabled
-   * for supported platforms
-   * @param size The window size, default to 1024x768 with no size hint. Set
-   * this to undefined if you do not want to automatically resize the window.
-   * This may cause issues for MacOS where the window is invisible until
-   * resized.
-   * @param window **UNSAFE**: Highly unsafe API, beware! An unsafe pointer to
-   * the platforms specific native window handle. If null or undefined a new
-   * window is created. If it's non-null - then child WebView is embedded into
-   * the given parent window. Otherwise a new window is created. Depending on
-   * the platform, a `GtkWindow`, `NSWindow` or `HWND` pointer can be passed
-   * here.
+   * @param options.debug Defaults to false, when true developer tools are
+   * enabled for supported platforms.
+   * @param options.handle **UNSAFE**: Highly unsafe API, beware! Wraps an
+   * existing native webview handle instead of creating a new instance.
+   * @param options.serialize Optional serializer for successful bind return
+   * values before JSON encoding.
+   * @param options.serializeError Optional serializer for bind-thrown errors
+   * before JSON encoding. Defaults to standard `Error` serialization.
+   * @param options.size The window size, default to 1024x768 with no size
+   * hint. Pass `size: undefined` to skip auto-resizing.
+   * @param options.window **UNSAFE**: Highly unsafe API, beware! An unsafe
+   * pointer to the platform-specific native parent window handle. If null or
+   * undefined a new top-level window is created. Depending on the platform, a
+   * `GtkWindow`, `NSWindow` or `HWND` pointer can be passed here.
    */
-  constructor(debug?: boolean, size?: Size, window?: Pointer | null);
-  constructor(
-    debugOrHandle: boolean | Pointer = false,
-    size: Size | undefined = {
-      width: 1024,
-      height: 768,
-      hint: SizeHint.NONE,
-    },
-    window: Pointer | null = null,
-  ) {
-    this.#handle =
-      typeof debugOrHandle === "bigint" || typeof debugOrHandle === "number"
-        ? debugOrHandle
-        : lib.symbols.webview_create(Number(debugOrHandle), window);
+  constructor(options: WebviewOptions = {}) {
+    const { debug = false, handle, window = null, size } = options;
+
+    this.#handle = handle ?? lib.symbols.webview_create(Number(debug), window);
+    this.#serialize = options.serialize ?? ((value: unknown) => value);
+    this.#serializeError = options.serializeError ?? serializeError;
 
     if (!this.#handle) {
       throw new Error(createWebviewErrorMessage());
     }
 
-    if (size !== undefined) this.size = size;
+    if (!Object.hasOwn( options, "size")) {
+      this.size = { width: 1024, height: 768, hint: SizeHint.NONE };
+    } else if (size) {
+      this.size = size;
+    }
+
     instances.push(this);
   }
 
@@ -219,10 +249,29 @@ export class Webview {
   }
 
   /**
+   * Runs the webview without blocking Bun's event loop.
+   *
+   * @param onClose Optional callback invoked after the window closes.
+   */
+  run(onClose?: () => void) {
+    const step = () => {
+      if (this.pump(false)) {
+        setTimeout(step, 0);
+        return;
+      }
+
+      this.destroy();
+      onClose?.();
+    };
+
+    step();
+  }
+
+  /**
    * Runs the main event loop until it's terminated. After this function exits
    * the webview is automatically destroyed.
    */
-  run() {
+  runSync() {
     lib.symbols.webview_run(this.#handle);
     this.destroy();
   }
@@ -240,25 +289,6 @@ export class Webview {
     }
 
     return !!lib.symbols.webview_pump_msgloop(this.#handle, block ? 1 : 0);
-  }
-
-  /**
-   * Runs the webview without blocking Bun's event loop.
-   *
-   * @param onClose Optional callback invoked after the window closes.
-   */
-  runNonBlocking(onClose?: () => void) {
-    const step = () => {
-      if (this.pump(false)) {
-        setTimeout(step, 0);
-        return;
-      }
-
-      this.destroy();
-      onClose?.();
-    };
-
-    step();
   }
 
   /**
@@ -361,16 +391,20 @@ export class Webview {
       try {
         const args = JSON.parse(req);
         const result = callback(...args);
-      
+        
         if (result instanceof Promise) {
           result
-            .then((r) => this.return(seq, 0, JSON.stringify(r)))
-            .catch((err) => this.return(seq, 1, encodeErrorResult(err)));
+            .then(
+              (value) => this.return(seq, 0, encodeResult(value, this.#serialize))
+            )
+            .catch(
+              (err) => this.return(seq, 1, encodeErrorResult(err, this.#serializeError))
+            );
         } else {
-          this.return(seq, 0, JSON.stringify(result));
+          this.return(seq, 0, encodeResult(result, this.#serialize));
         }
       } catch (err) {
-        this.return(seq, 1, encodeErrorResult(err));
+        this.return(seq, 1, encodeErrorResult(err, this.#serializeError));
       }
     });
   }

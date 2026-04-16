@@ -20,7 +20,7 @@ const mode = (Bun.argv[2] ?? "bindings") as ProbeMode;
 const timeoutMs = Number(Bun.argv[3] ?? "5000");
 
 let timeout: ReturnType<typeof setTimeout> | undefined;
-let server: Bun.Server | undefined;
+let server: Bun.Server<undefined> | undefined;
 let exitCode = 1;
 
 function finish(webview: Webview, code: number, report: ProbeReport | string) {
@@ -129,7 +129,7 @@ function runBindingsProbe() {
 
   webview.navigate(server.url.toString());
   startTimeout(webview, "binding results");
-  webview.runNonBlocking(() => process.exit(exitCode));
+  webview.run(() => process.exit(exitCode));
 }
 
 function runServerProbe() {
@@ -167,7 +167,7 @@ function runServerProbe() {
   webview.navigate(server.url.toString().replace("0.0.0.0", "127.0.0.1"));
 
   startTimeout(webview, "server navigation");
-  webview.runNonBlocking(() => process.exit(exitCode));
+  webview.run(() => process.exit(exitCode));
 }
 
 if (mode === "server") {
