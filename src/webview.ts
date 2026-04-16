@@ -15,10 +15,6 @@ export type JsonValue =
 
 export type Serializer = (value: unknown) => JsonValue;
 
-function defaultSerialize(value: unknown): JsonValue {
-  return value as JsonValue;
-}
-
 function serializeError(err: unknown): JsonValue {
   if (err instanceof Error) {
     return {
@@ -210,7 +206,7 @@ export class Webview {
     const { debug = false, handle, window = null, size } = options;
 
     this.#handle = handle ?? lib.symbols.webview_create(Number(debug), window);
-    this.#serialize = options.serialize ?? defaultSerialize;
+    this.#serialize = options.serialize ?? ( value => value as JsonValue );
     this.#serializeError = options.serializeError ?? serializeError;
 
     if (!this.#handle) {
