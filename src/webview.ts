@@ -25,17 +25,17 @@ function serializeError(err: unknown): JsonValue {
   }
 
   return {
-    message: String(err)
+    message: err == null ? "An unknown error occurred." : String(err),
   };
 }
 
 function encodeResult(value: unknown, serialize: Serializer): string {
-  return JSON.stringify(serialize(value));
+  return JSON.stringify(serialize(value) ?? null);
 }
 
 function encodeErrorResult(value: unknown, serialize: Serializer): string {
   try {
-    return JSON.stringify(serialize(value));
+    return JSON.stringify(serialize(value) ?? null);
   } catch {
     return JSON.stringify(serializeError(new Error("An unexpected error occurred.")));
   }

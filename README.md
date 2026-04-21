@@ -89,6 +89,12 @@ The default `serializeError` returns `{ name, message, stack }`. If production s
 matters, inject your own serializer and strip `stack` or collapse internal cause chains
 there.
 
+Binding return values still travel through JSON encoding. That means top-level
+`undefined`/`void` values are normalized to `null` so the bridge does not fail.
+Nested `undefined` values keep normal JSON behavior: array entries become `null`, and
+object properties with `undefined` values are dropped. If you need a different contract,
+use `serialize` / `serializeError` and handle the matching decode path on the page side.
+
 ```ts
 const webview = new Webview({
   serializeError(error) {
