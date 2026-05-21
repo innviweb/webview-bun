@@ -1,5 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { Webview } from "./webview";
+import { fileURLToPath } from "node:url";
+import type { Webview } from "./webview";
 
 export function encodeCString(value: string) {
   return ptr(new TextEncoder().encode(value + "\0"));
@@ -16,21 +17,25 @@ export function unload() {
   lib.close();
 }
 
-let lib_file;
+let lib_file: string;
 
 if (process.env.WEBVIEW_PATH) {
-  lib_file = { default: process.env.WEBVIEW_PATH };
+  lib_file = process.env.WEBVIEW_PATH;
 } else if (process.platform === "win32") {
-  //@ts-expect-error
-  lib_file = await import("../build/libwebview.dll");
+  lib_file = fileURLToPath(new URL("../build/libwebview.dll", import.meta.url));
 } else if (process.platform === "linux") {
-  lib_file = await import(`../build/libwebview-${process.arch}.so`);
+  lib_file = fileURLToPath(
+    new URL(`../build/libwebview-${process.arch}.so`, import.meta.url),
+  );
 } else if (process.platform === "darwin") {
-  //@ts-expect-error
-  lib_file = await import("../build/libwebview.dylib");
+  lib_file = fileURLToPath(
+    new URL("../build/libwebview.dylib", import.meta.url),
+  );
+} else {
+  throw new Error(`Unsupported platform: ${process.platform}`);
 }
 
-export const lib = dlopen(lib_file.default, {
+export const lib = dlopen(lib_file, {
   webview_create: {
     args: [FFIType.i32, FFIType.ptr],
     returns: FFIType.ptr,
