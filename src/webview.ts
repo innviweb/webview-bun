@@ -13,31 +13,20 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type Serializer = (value: unknown) => JsonValue;
+export type Replacer = (this: unknown, key: string, value: unknown) => unknown;
 
-function serializeError(err: unknown): JsonValue {
-  if (err instanceof Error) {
-    return {
-      message: err.message,
-      name: err.name,
-      stack: err.stack ?? `${err.name}: ${err.message}`,
-    };
-  }
-
-  return {
-    message: err == null ? "An unknown error occurred." : String(err),
-  };
+function encodeResult(value: unknown, replacer?: Replacer): string {
+  return JSON.stringify(value, replacer) ?? "null";
 }
 
-function encodeResult(value: unknown, serialize: Serializer): string {
-  return JSON.stringify(serialize(value) ?? null);
-}
-
-function encodeErrorResult(value: unknown, serialize: Serializer): string {
+function encodeError(value: unknown, replacer?: Replacer): string {
   try {
-    return JSON.stringify(serialize(value) ?? null);
+    return JSON.stringify(value, replacer) ?? "null";
   } catch {
-    return JSON.stringify(serializeError(new Error("An unexpected error occurred.")));
+    return JSON.stringify({
+      message: "Failed to JSON stringify binding error.",
+      name: "Error",
+    });
   }
 }
 
@@ -74,14 +63,13 @@ export const enum SizeHint {
 export interface WebviewOptions {
   debug?: boolean;
   handle?: Pointer;
-  serialize?: Serializer;
-  serializeError?: Serializer;
+  replacer?: Replacer;
   size?: Size;
   window?: Pointer | null;
 }
 
 export interface WebviewApi {
-  setDecodeError(fn: (err: unknown) => unknown): void;
+  setReviver(fn: (this: unknown, key: string, value: unknown) => unknown): void;
 }
 
 function createWebviewErrorMessage() {
@@ -96,8 +84,7 @@ function createWebviewErrorMessage() {
 export class Webview {
   #handle: Pointer | null = null;
   #callbacks: Map<string, JSCallback> = new Map();
-  #serialize: Serializer;
-  #serializeError: Serializer;
+  #replacer?: Replacer;
 
   /** **UNSAFE**: Highly unsafe API, beware!
    *
@@ -191,10 +178,8 @@ export class Webview {
    * enabled for supported platforms.
    * @param options.handle **UNSAFE**: Highly unsafe API, beware! Wraps an
    * existing native webview handle instead of creating a new instance.
-   * @param options.serialize Optional serializer for successful bind return
-   * values before JSON encoding.
-   * @param options.serializeError Optional serializer for bind-thrown errors
-   * before JSON encoding. Defaults to standard `Error` serialization.
+   * @param options.replacer Optional JSON replacer for bind return values and
+   * bind-thrown errors.
    * @param options.size The window size, default to 1024x768 with no size
    * hint. Pass `size: undefined` to skip auto-resizing.
    * @param options.window **UNSAFE**: Highly unsafe API, beware! An unsafe
@@ -206,8 +191,7 @@ export class Webview {
     const { debug = false, handle, window = null, size } = options;
 
     this.#handle = handle ?? lib.symbols.webview_create(Number(debug), window);
-    this.#serialize = options.serialize ?? ( value => value as JsonValue );
-    this.#serializeError = options.serializeError ?? serializeError;
+    this.#replacer = options.replacer;
 
     if (!this.#handle) {
       throw new Error(createWebviewErrorMessage());
@@ -400,16 +384,16 @@ export class Webview {
         if (result instanceof Promise) {
           result
             .then(
-              (value) => this.return(seq, 0, encodeResult(value, this.#serialize))
+              (value) => this.return(seq, 0, encodeResult(value, this.#replacer))
             )
             .catch(
-              (err) => this.return(seq, 1, encodeErrorResult(err, this.#serializeError))
+              (err) => this.return(seq, 1, encodeError(err, this.#replacer))
             );
         } else {
-          this.return(seq, 0, encodeResult(result, this.#serialize));
+          this.return(seq, 0, encodeResult(result, this.#replacer));
         }
       } catch (err) {
-        this.return(seq, 1, encodeErrorResult(err, this.#serializeError));
+        this.return(seq, 1, encodeError(err, this.#replacer));
       }
     });
   }

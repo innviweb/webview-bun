@@ -82,46 +82,58 @@ const webview = new Webview({
 });
 ```
 
-## Error serialization
+## Reply serialization
 
-The Bun wrapper now accepts `serializeError` and `serialize` options in the constructor.
-The default `serializeError` returns `{ name, message, stack }`. If production secrecy
-matters, inject your own serializer and strip `stack` or collapse internal cause chains
-there.
+The Bun wrapper accepts a `replacer` option in the constructor. It is passed to
+`JSON.stringify(value, replacer)` for both fulfilled bind return values and thrown bind
+errors.
 
 Binding return values still travel through JSON encoding. That means top-level
 `undefined`/`void` values are normalized to `null` so the bridge does not fail.
 Nested `undefined` values keep normal JSON behavior: array entries become `null`, and
 object properties with `undefined` values are dropped. If you need a different contract,
-use `serialize` / `serializeError` and handle the matching decode path on the page side.
+use `replacer` and handle the matching reviver path on the page side.
 
 ```ts
 const webview = new Webview({
-  serializeError(error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { name: "Error", message, stack: "" };
+  replacer(_key, value) {
+    if (!(value instanceof Error)) return value;
+
+    return {
+      type: "Error",
+      name: value.name,
+      message: value.message,
+      stack: value.stack ?? "",
+    };
   },
 });
 ```
 
-## Page-side error decoding
+## Page-side reply parsing
 
-The native bridge exposes `window.__webview__.api.setDecodeError(fn)` so page-side rejected
-promises can reconstruct Bun-serialized errors however your app wants. Pair it with the
-Bun-side `serializeError` option: if you serialize extra fields on the Bun side, decode
-those same fields on the page side so the round-trip stays symmetric.
+The native bridge exposes `window.__webview__.api.setReviver(fn)` so page-side replies can
+reconstruct Bun-serialized values however your app wants. Pair it with the Bun-side
+`replacer` option: if you serialize extra fields on the Bun side, revive those same fields
+on the page side so the round-trip stays symmetric.
 
 ```ts
 const webview = new Webview({
-  serializeError(error) {
-    if (!(error instanceof Error)) return { message: String(error) };
-    return { name: error.name, message: error.message, stack: error.stack ?? "" };
+  replacer(_key, value) {
+    if (!(value instanceof Error)) return value;
+
+    return {
+      type: "Error",
+      name: value.name,
+      message: value.message,
+      stack: value.stack ?? "",
+    };
   },
 });
 
 webview.init(`
-  window.__webview__.api.setDecodeError((value) => {
-    if (!value || typeof value !== "object" || typeof value.message !== "string") return value;
+  window.__webview__.api.setReviver((_key, value) => {
+    if (!value || typeof value !== "object" || value.type !== "Error") return value;
+
     const error = new Error(value.message);
     if (typeof value.name === "string") error.name = value.name;
     if (typeof value.stack === "string") error.stack = value.stack;
@@ -268,8 +280,8 @@ This fork is maintained by `innviweb`.
   - non-blocking message loop support via `Webview.pump()` and default `Webview.run()`
   - legacy blocking event loop available as `Webview.runSync()`
   - single-options constructor with `debug`, `size`, `window`, `handle`,
-    `serialize`, and `serializeError`
-  - page-side error reconstruction hook via `window.__webview__.api.setDecodeError(fn)`
+    and `replacer`
+  - page-side reply reconstruction hook via `window.__webview__.api.setReviver(fn)`
 
 ## License
 
