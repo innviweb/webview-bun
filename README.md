@@ -84,61 +84,70 @@ const webview = new Webview({
 
 ## Reply serialization
 
-The Bun wrapper accepts a `replacer` option in the constructor. It is passed to
-`JSON.stringify(value, replacer)` for both fulfilled bind return values and thrown bind
-errors.
+By default, bind return values and thrown bind errors are serialized with
+`JSON.stringify(value) ?? "null"`.
 
 Binding return values still travel through JSON encoding. That means top-level
 `undefined`/`void` values are normalized to `null` so the bridge does not fail.
 Nested `undefined` values keep normal JSON behavior: array entries become `null`, and
-object properties with `undefined` values are dropped. If you need a different contract,
-use `replacer` and handle the matching reviver path on the page side.
+object properties with `undefined` values are dropped.
+
+```ts
+const webview = new Webview();
+```
+
+If you need a different contract, pass an `encode(value)` method that returns the finished
+JSON reply string and handle the matching `decode(text)` method on the page side.
 
 ```ts
 const webview = new Webview({
-  replacer(_key, value) {
-    if (!(value instanceof Error)) return value;
-
-    return {
-      type: "Error",
-      name: value.name,
-      message: value.message,
-      stack: value.stack ?? "",
-    };
+  encode(value) {
+    return JSON.stringify(value, (_key, value) => {
+      if (value === undefined) return { $webview: "Undefined" };
+      return value;
+    }) ?? "null";
   },
 });
 ```
 
 ## Page-side reply parsing
 
-The native bridge exposes `window.__webview__.api.setReviver(fn)` so page-side replies can
+The native bridge exposes `window.__webview__.api.setDecode(fn)` so page-side replies can
 reconstruct Bun-serialized values however your app wants. Pair it with the Bun-side
-`replacer` option: if you serialize extra fields on the Bun side, revive those same fields
+`encode` option: if you serialize extra fields on the Bun side, decode those same fields
 on the page side so the round-trip stays symmetric.
 
 ```ts
 const webview = new Webview({
-  replacer(_key, value) {
-    if (!(value instanceof Error)) return value;
-
-    return {
-      type: "Error",
-      name: value.name,
-      message: value.message,
-      stack: value.stack ?? "",
-    };
+  encode(value) {
+    return JSON.stringify(value, (_key, value) => {
+      if (value === undefined) return { $webview: "Undefined" };
+      return value;
+    }) ?? "null";
   },
 });
 
 webview.init(`
-  window.__webview__.api.setReviver((_key, value) => {
-    if (!value || typeof value !== "object" || value.type !== "Error") return value;
+  function restore(value) {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++) {
+        value[index] = restore(value[index]);
+      }
+      return value;
+    }
 
-    const error = new Error(value.message);
-    if (typeof value.name === "string") error.name = value.name;
-    if (typeof value.stack === "string") error.stack = value.stack;
-    return error;
-  });
+    if (value && typeof value === "object") {
+      if (value.$webview === "Undefined") return undefined;
+
+      for (const key of Object.keys(value)) {
+        value[key] = restore(value[key]);
+      }
+    }
+
+    return value;
+  }
+
+  window.__webview__.api.setDecode((text) => restore(JSON.parse(text)));
 `);
 ```
 
@@ -280,8 +289,8 @@ This fork is maintained by `innviweb`.
   - non-blocking message loop support via `Webview.pump()` and default `Webview.run()`
   - legacy blocking event loop available as `Webview.runSync()`
   - single-options constructor with `debug`, `size`, `window`, `handle`,
-    and `replacer`
-  - page-side reply reconstruction hook via `window.__webview__.api.setReviver(fn)`
+    and `encode`
+  - page-side reply reconstruction hook via `window.__webview__.api.setDecode(fn)`
 
 ## License
 
