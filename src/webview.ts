@@ -13,15 +13,11 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type Replacer = (this: unknown, key: string, value: unknown) => unknown;
+export type Encode = (value: unknown) => string;
 
-function encodeResult(value: unknown, replacer?: Replacer): string {
-  return JSON.stringify(value, replacer) ?? "null";
-}
-
-function encodeError(value: unknown, replacer?: Replacer): string {
+function encodeError(value: unknown, encode: Encode): string {
   try {
-    return JSON.stringify(value, replacer) ?? "null";
+    return encode(value);
   } catch {
     return JSON.stringify({
       message: "Failed to JSON stringify binding error.",
@@ -62,14 +58,14 @@ export const enum SizeHint {
 
 export interface WebviewOptions {
   debug?: boolean;
+  encode?: Encode;
   handle?: Pointer;
-  replacer?: Replacer;
   size?: Size;
   window?: Pointer | null;
 }
 
 export interface WebviewApi {
-  setReviver(fn: (this: unknown, key: string, value: unknown) => unknown): void;
+  setDecode(fn: (text: string) => unknown): void;
 }
 
 function createWebviewErrorMessage() {
@@ -84,7 +80,7 @@ function createWebviewErrorMessage() {
 export class Webview {
   #handle: Pointer | null = null;
   #callbacks: Map<string, JSCallback> = new Map();
-  #replacer?: Replacer;
+  #encode: Encode;
 
   /** **UNSAFE**: Highly unsafe API, beware!
    *
@@ -178,7 +174,7 @@ export class Webview {
    * enabled for supported platforms.
    * @param options.handle **UNSAFE**: Highly unsafe API, beware! Wraps an
    * existing native webview handle instead of creating a new instance.
-   * @param options.replacer Optional JSON replacer for bind return values and
+   * @param options.encode Optional JSON encoder for bind return values and
    * bind-thrown errors.
    * @param options.size The window size, default to 1024x768 with no size
    * hint. Pass `size: undefined` to skip auto-resizing.
@@ -188,10 +184,10 @@ export class Webview {
    * `GtkWindow`, `NSWindow` or `HWND` pointer can be passed here.
    */
   constructor(options: WebviewOptions = {}) {
-    const { debug = false, handle, window = null, size } = options;
+    const { debug = false, encode, handle, window = null, size } = options;
 
     this.#handle = handle ?? lib.symbols.webview_create(Number(debug), window);
-    this.#replacer = options.replacer;
+    this.#encode = encode ?? ((value) => JSON.stringify(value) ?? "null");
 
     if (!this.#handle) {
       throw new Error(createWebviewErrorMessage());
@@ -383,17 +379,13 @@ export class Webview {
 
         if (result instanceof Promise) {
           result
-            .then(
-              (value) => this.return(seq, 0, encodeResult(value, this.#replacer))
-            )
-            .catch(
-              (err) => this.return(seq, 1, encodeError(err, this.#replacer))
-            );
+            .then((value) => this.return(seq, 0, this.#encode(value)))
+            .catch((err) => this.return(seq, 1, encodeError(err, this.#encode)));
         } else {
-          this.return(seq, 0, encodeResult(result, this.#replacer));
+          this.return(seq, 0, this.#encode(result));
         }
       } catch (err) {
-        this.return(seq, 1, encodeError(err, this.#replacer));
+        this.return(seq, 1, encodeError(err, this.#encode));
       }
     });
   }
