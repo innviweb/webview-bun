@@ -18,11 +18,19 @@ export type Encode = (value: unknown) => string;
 function encodeError(value: unknown, encode: Encode): string {
   try {
     return encode(value);
-  } catch {
-    return JSON.stringify({
-      message: "Failed to JSON stringify binding error.",
-      name: "Error",
-    });
+  } catch (cause) {
+    // `value` couldn't be encoded. Re-encode a clean Error carrying the serialization
+    // failure as its cause, so the page still decodes a real Error (not a plain object).
+    // The clean Error has nothing the encoder can choke on; if it still throws, fall back
+    // to a literal so a bind reply never hangs.
+    try {
+      return encode(new Error("Failed to encode bind error.", { cause }));
+    } catch {
+      return JSON.stringify({
+        message: "Failed to JSON stringify binding error.",
+        name: "Error",
+      });
+    }
   }
 }
 
@@ -372,20 +380,17 @@ export class Webview {
    * ```
    */
   bind(name: string, callback: (...args: any) => any) {
-    this.bindRaw(name, (seq, req) => {
+    this.bindRaw(name, async (seq, req) => {
       try {
-        const args = JSON.parse(req);
-        const result = callback(...args);
+        const result = callback(...JSON.parse(req));
 
         if (result instanceof Promise) {
-          result
-            .then((value) => this.return(seq, 0, this.#encode(value)))
-            .catch((err) => this.return(seq, 1, encodeError(err, this.#encode)));
+          this.return(seq, 0, this.#encode(await result));
         } else {
           this.return(seq, 0, this.#encode(result));
         }
-      } catch (err) {
-        this.return(seq, 1, encodeError(err, this.#encode));
+      } catch (cause) {
+        this.return(seq, 1, encodeError(cause, this.#encode));
       }
     });
   }
